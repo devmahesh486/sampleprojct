@@ -1,0 +1,91 @@
+pipeline {
+    agent any
+    parameters {
+        choice(name: 'Service_Type', choices: ['5day-services', 'saas-services'], description: 'service type e.g., saas/5day')
+        string(name: 'Service', defaultValue: 'database-migration-service', description: 'Service to build')
+        string(name: 'ARTIFACT_ID', defaultValue: 'database-migration-service', description: 'Enter Artifact ID')
+        string(name: 'version', defaultValue: 'latest', description: 'Upload and deploy image version')
+    }
+    environment {
+     GITLAB_CONTAINER_REGISTRY = "172.16.6.90:5050/${Service_Type}/${params.Service}"
+   }
+   options { timestamps () }
+   stages {
+   stage ("Pull docker image "){
+       steps {
+           script {
+               docker.withRegistry("http://${GITLAB_CONTAINER_REGISTRY}", 'GitLab_Container_Registry') {
+        
+                       sh "docker pull ${GITLAB_CONTAINER_REGISTRY}/${params.ARTIFACT_ID}:${params.version}"   
+                   
+               }
+           }
+       }
+   }
+        
+        stage ("Create/Push docker image")
+        {
+             steps {
+                script {
+                    //  if (params.BranchName == 'master' || params.BranchName == 'develop') {
+                        withCredentials([[
+                              $class: 'AmazonWebServicesCredentialsBinding',
+                               credentialsId: "ECRupload",
+                               accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                      ]]) {
+    // sh "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 793491613875.dkr.ecr.ap-south-1.amazonaws.com"
+                        // sh "docker login -u AWS -p \$(aws ecr get-login-password --region ap-south-1) 793491613875.dkr.ecr.ap-south-1.amazonaws.com"
+                    
+                       
+                        sh "/usr/local/bin/aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 793491613875.dkr.ecr.ap-south-1.amazonaws.com"
+                        sh "docker tag ${GITLAB_CONTAINER_REGISTRY}/${params.ARTIFACT_ID}:${params.version} 793491613875.dkr.ecr.ap-south-1.amazonaws.com/${params.ARTIFACT_ID}:${params.version}"
+                        sh "docker push 793491613875.dkr.ecr.ap-south-1.amazonaws.com/${params.ARTIFACT_ID}:${params.version}"
+                       
+                        // sh "docker push 793491613875.dkr.ecr.ap-south-1.amazonaws.com/${params.Service}/${params.ARTIFACT_ID}:${params.version}"
+                          }
+
+                }
+             }
+        }
+    stage ("Deploy image"){
+        steps {
+            script {
+                if(params.Deploy_Image_To_Cluster){
+                sh 'export KUBECONFIG=/var/lib/jenkins/.kube/config' 
+               sh "/usr/local/bin/kubectl config use-context ${params.cluster}"
+                sh '/usr/local/bin/kubectl get nodes'
+
+             if (params.Service=='gateway-service') {
+                // sh '/usr/local/bin/kubectl set image deployment  cloud-apigateway-server apigateway-server= cloud-apigateway-server:latest'
+                    sh "/usr/local/bin/kubectl set image deployment cloud-apigateway-server apigateway-server=793491613875.dkr.ecr.ap-south-1.amazonaws.com/${params.ARTIFACT_ID}:${params.version}"
+            }
+            else if (params.Service=='eureka-server') {
+                    sh "/usr/local/bin/kubectl set image deployment cloud-eureka-server cloud-eureka-server=793491613875.dkr.ecr.ap-south-1.amazonaws.com/${params.ARTIFACT_ID}:${params.version}"
+            }
+            else if (params.Service=='configuration-server') {
+                    sh "/usr/local/bin/kubectl set image deployment configserver config-server=793491613875.dkr.ecr.ap-south-1.amazonaws.com/${params.ARTIFACT_ID}:${params.version}"
+            }
+            else if (params.Service=='database-migration-service') {
+                    sh "/usr/local/bin/kubectl set image deployment dbmigrationservice database-migration-service=793491613875.dkr.ecr.ap-south-1.amazonaws.com/${params.ARTIFACT_ID}:${params.version}"
+            }
+            else if (params.Service=='notification-server') {
+                    sh "/usr/local/bin/kubectl set image deployment notification-service cloud-notification-service=793491613875.dkr.ecr.ap-south-1.amazonaws.com/${params.ARTIFACT_ID}:${params.version}"
+            }
+            else{
+                sh "/usr/local/bin/kubectl set image deployment ${params.Service} ${params.Service}=793491613875.dkr.ecr.ap-south-1.amazonaws.com/${params.ARTIFACT_ID}:${params.version}"
+            } 
+        
+        }
+                }
+                }
+                }
+        }
+
+        
+    }
+
+   
+    
+
+
